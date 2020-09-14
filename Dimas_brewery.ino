@@ -19,7 +19,6 @@ extern uint8_t SmallFont[];
 extern uint8_t SevenSegNumFont[];  
 //--------------- pin map -----------------------
 #define TEMP_PIN         A1        //port for temperature sensor
-#define LEVEL_BOTTOM_PIN A2        //port for liquid level sensor in bottom pot
 #define LEVEL_TOP_PIN    A3        //port for liquid level sensor in top pot
 #define HEAT_BOILER_PIN  13        //port for heater
 #define PUMP_PIN         A5        //port for pump
@@ -60,11 +59,12 @@ int    hour, minute, sec;            // hours, minutes,secs
 int    pressed_button;               // ID of pressed button
 int    log_adr;                      // curent EEPROM address for logging temperature during mashing
 unsigned long lastLogTime;           // time of last logging
+unsigned long pumpStopTime;          //
 float boilingTemp;                   // temperature of boiling
 int   chDesinTime = 1;               // Time for desinfection of chiller
 int   nopower_time=0;                // powed down time in minutes
 byte  restore_flag=0;
-byte temp_byte;
+byte  temp_byte;
 byte   pumpStatus;                  //0=off, 1=on
 byte   heaterStatus;				//0=off, 1=on
 
@@ -76,7 +76,6 @@ float gettemp() {                        //getting temperature and update global
   temp = (t_sensor.getTempCByIndex(0));  //receive temperature to global variable temp. byIndex(0) refers to the first IC on the wire
   t_sensor.requestTemperatures();        //Send the commands to recalculate temp will be read next time
 }
-//-----------------------------------------------------
 void printHeader() {                      //printing header string on the screen: Time, Title, Temperature
   gettemp();
   t = rtc.getTime();
@@ -95,7 +94,6 @@ void printHeader() {                      //printing header string on the screen
   myGLCD.setColor(255, 255, 255);                 //color White
   myGLCD.print(topic, CENTER, 0);                 //print topic of menu
 }
-//------------------------------------------------------------------------
 void preheating(int temp_target, boolean logFlag) {
   Serial.println("preheating");
   float starttemp = temp;                                                // starting temperature. local variable
@@ -111,15 +109,21 @@ void preheating(int temp_target, boolean logFlag) {
       log_adr++;
     }
 
-    if (digitalRead(LEVEL_BOTTOM_PIN)==HIGH) {                           // water covers heaters -->
-    //if (true) {                                                        // temporary code
-      digitalWrite(HEAT_BOILER_PIN, HIGH);                               // switch-ON heaters
+	
+	
+	
+	
+
+      digitalWrite(HEAT_BOILER_PIN, HIGH);                     // switch-ON heaters
 	  heaterStatus=1;
-      if (digitalRead(LEVEL_TOP_PIN) == LOW ) {
-        digitalWrite(PUMP_PIN, HIGH); // both levels are ok. switch-ON pump
-		pumpStatus=1;
+      if (digitalRead(LEVEL_TOP_PIN) == LOW ) {                // mash level is low. switch-ON pump (only if pump on/off delay time is passed)
+        if (rtc.getUnixTime(rtc.getTime())-pumpStopTime>5){
+			digitalWrite(PUMP_PIN, HIGH);
+			pumpStatus=1;
+			} 
       } else {
-        digitalWrite(PUMP_PIN, LOW);  // Overflow.     switch-OFF pump
+        digitalWrite(PUMP_PIN, LOW);                           // Overflow.     switch-OFF pump
+		pumpStopTime=rtc.getUnixTime(rtc.getTime());
 		pumpStatus=0;
       }
       myGLCD.setColor(255, 255, 255);
@@ -131,25 +135,13 @@ void preheating(int temp_target, boolean logFlag) {
       delay(100);
       myGLCD.print("   Pre-Heating...   ", 0, 130);
       delay(70);
-    } else {                                              //water does not cover heaters -->
-      digitalWrite(HEAT_BOILER_PIN, LOW);                   //switch-OFF heaters
-	  heaterStatus=0;
-      digitalWrite(PUMP_PIN, LOW);                          //switch-OFF pump
-	  pumpStatus=0;
-      myGLCD.setColor(255, 0, 0);
-      myGLCD.print("LOW MASH LEVEL!", CENTER, 130);          // Warhing message: LOW MASH LEVEL
-      tone(BUZZER_PIN, 1047,400);
-      delay(500);
-      tone(BUZZER_PIN, 784,400);
-      delay(500);
-      tone(BUZZER_PIN, 1047,400);
-      delay(500);
-      tone(BUZZER_PIN, 784,400);
-      delay(500);
-	  //noTone(BUZZER_PIN);
-      myGLCD.print("                ", 0, 130);
-    }
-    if ((rtc.getUnixTime(rtc.getTime()) - starttime) > 120000 and (temp - starttemp) < 1) { // check if heaters work well
+    
+	
+	
+	
+	
+	
+    if ((rtc.getUnixTime(rtc.getTime()) - starttime) > 240 and (temp - starttemp) < 1) { // check if heaters work well
       digitalWrite(HEAT_BOILER_PIN, LOW);                    // switch-OFF heaters
 	  heaterStatus=0;
       digitalWrite(PUMP_PIN, LOW);                           // switch-OFF pump
@@ -171,10 +163,10 @@ void preheating(int temp_target, boolean logFlag) {
   digitalWrite(HEAT_BOILER_PIN, LOW);                        // preheating finished --> switch-OFF heaters
   heaterStatus=0;
   digitalWrite(PUMP_PIN, LOW);                               // switch-OFF pump
+  pumpStopTime=rtc.getUnixTime(rtc.getTime());
   pumpStatus=0;
   pass_minutes = (rtc.getUnixTime(rtc.getTime()) - starttime) / 60;             // how long was preheating. global variable
 }
-//-------------------------------------------------------------------------
 void termostat(int temp_target, int time_target, boolean logFlag) {      // Termostating procedure
   Serial.print("TERMOSTAT. temp:");
   Serial.print(temp_target);
@@ -197,43 +189,27 @@ void termostat(int temp_target, int time_target, boolean logFlag) {      // Term
       log_adr++;
     }
 
-    if (digitalRead(LEVEL_BOTTOM_PIN)==HIGH) {                             // MASH covers heaters
-    //if (true) {                                                            // !!!!!!!!!  temporary code  !!!!!!!!
       if (temp <= temp_target) {
-        digitalWrite(HEAT_BOILER_PIN, HIGH);         // temperature less than target switch-ON the heater
+        digitalWrite(HEAT_BOILER_PIN, HIGH);         // temperature less than target --> switch-ON the heater
 		heaterStatus=1;
       } else {
         digitalWrite(HEAT_BOILER_PIN, LOW); // temperature >= target --> switch-off the heater
 		heaterStatus=0;
       }
       if (digitalRead(LEVEL_TOP_PIN) == LOW) {
-        digitalWrite(PUMP_PIN, HIGH); // top mash level is OK. switch-ON pump
-		pumpStatus=1;
+        if((rtc.getUnixTime(rtc.getTime())-pumpStopTime)>5){
+			    digitalWrite(PUMP_PIN, HIGH); // mash level is low. switch-ON pump
+			    pumpStatus=1;}
       } else {
         digitalWrite(PUMP_PIN, LOW);  // Overflow.             switch-OFF pump
+		pumpStopTime=rtc.getUnixTime(rtc.getTime());
 		pumpStatus=0;
       }
       myGLCD.setColor(255, 255, 255);
       myGLCD.print("Passed    of    mins", CENTER, 130);                  // print passed time
       myGLCD.printNumI(pass_minutes, 96, 130, 3);
       myGLCD.printNumI(time_target, 192, 130, 3);
-    } else {                                               // MASH LEVEL is LOW
-      digitalWrite(HEAT_BOILER_PIN, LOW);                 // SWITCH-OFF the heater
-	  heaterStatus=0;
-      digitalWrite(PUMP_PIN, LOW);                        // switch-OFF pump
-	  pumpStatus=0;
-      myGLCD.setColor(255, 0, 0);
-      myGLCD.print("LOW MASH LEVEL!", CENTER, 130);       // Warhing message: LOW WATER LEVEL
-      tone(BUZZER_PIN, 1047,400);
-      delay(500);
-      tone(BUZZER_PIN, 784,400);
-      delay(500);
-      tone(BUZZER_PIN, 1047,400);
-      delay(500);
-      tone(BUZZER_PIN, 784,400);
-      delay(500);
-      myGLCD.print("                ", 0, 130);
-    }
+   	
     pass_minutes = (rtc.getUnixTime(rtc.getTime()) - starttime) / 60;           // calculate how many minutes passed since termostating started
     rwi2c.put(pass_minutes_adr, pass_minutes);    //save pass_minutes for restore by power monitor
     //    Serial.println("save pass_minutes to RTC register");
@@ -244,9 +220,9 @@ void termostat(int temp_target, int time_target, boolean logFlag) {      // Term
   digitalWrite(HEAT_BOILER_PIN, LOW);                       // SWITCH-OFF the heater
   heaterStatus=0;
   digitalWrite(PUMP_PIN, LOW);                              // switch-OFF pump
+  pumpStopTime=rtc.getUnixTime(rtc.getTime());
   pumpStatus=0;
 }
-//-------------------------------------------------------------------------
 void mainmenu() {
 
   rwi2c.put(trace_adr, 0);
@@ -300,7 +276,6 @@ void mainmenu() {
     }
   }
 }
-//----------------------------------------------------------------------
 void clean() {
 
   Serial.println("Cleaning");
@@ -368,7 +343,6 @@ void clean() {
     }
   }
 }
-//-------------------------------------------------------------------------
 void mashing_setup() {
   int b_TimeMinus[6], b_TimePlus[6], b_TempMinus[6], b_TempPlus[6], b_Menu, b_Mash, b_RestMinus, b_RestPlus, b_Next; //buttons IDs
   int i;                                                                 //counter
@@ -407,15 +381,15 @@ void mashing_setup() {
       }
     }
   }
-MashingNext:                                                           // if NEXT pessed
-  myGLCD.clrScr();                                                     // clear screen
-  myGLCD.setColor(255, 255, 255);                                      // color
-  myButtons.deleteAllButtons();                                        // delete old buttons
-  for (i = 0; i < EEPROM.read(rNum_adr); i++) {                                         // -----=========  drawing menu for choosing time and temperature of rests =====-------
+MashingNext:                                                         // if NEXT pessed
+  myGLCD.clrScr();                                                   // clear screen
+  myGLCD.setColor(255, 255, 255);                                    // color
+  myButtons.deleteAllButtons();                                      // delete old buttons
+  for (i = 0; i < EEPROM.read(rNum_adr); i++) {                      // -----=========  drawing menu for choosing time and temperature of rests =====-------
     myGLCD.print("Rest", 0, 50 + i * 22);                            //printing string by string
     myGLCD.printNumI(i + 1, 64, 50 + i * 22);
-    myGLCD.printNumI(EEPROM.read(rTime_startAdr) + i, 115, 50 + i * 22, 3);
-    myGLCD.printNumI(EEPROM.read(rTemp_startAdr) + i, 253, 50 + i * 22, 2);
+    myGLCD.printNumI(EEPROM.read(rTime_startAdr+i), 115, 50 + i * 22, 3);
+    myGLCD.printNumI(EEPROM.read(rTemp_startAdr+i), 253, 50 + i * 22, 2);
     b_TimeMinus[i]   = myButtons.addButton(90, 50 + i * 22, 20, 20, "-"); // + - buttons initialisation string by string
     b_TimePlus[i]    = myButtons.addButton(165, 50 + i * 22, 20, 20, "+");
     b_TempMinus[i]   = myButtons.addButton(230, 50 + i * 22, 20, 20, "-");
@@ -459,7 +433,6 @@ MashingNext:                                                           // if NEX
     }
   }
 }
-//-------------------------------------------------------------
 void mash() {
   int b_Menu, b_Boiling, i, stopLog_adr, t_drop, n, tn, c;    // Buttons IDs and counter, local variables
   topic = "Mashing";                         // Topic
@@ -540,21 +513,21 @@ restore_mashing:                                   //MASHING RESTORE START
       myGLCD.printNumI(i + 1, 64, 50);                                    // rest #
       myGLCD.printNumI(EEPROM.read(rTime_startAdr + i), 115, 50, 3);      //duration of rest
       myGLCD.printNumI(EEPROM.read(rTemp_startAdr + i), 253, 50, 2);      //temperature of rest 
-      preheating(EEPROM.read(rTemp_startAdr + i), true);                  //preheating to the rest temperature, store temperature log
-      rwi2c.put( i_adr,i);    Serial.println("save i to RTC register");   // save i in to RTC register for restore after power shootdown           
+      rwi2c.put( i_adr,i);    Serial.println("save i to RTC register");   // save i in to RTC register for restore after power shootdown 	  
+      preheating(EEPROM.read(rTemp_startAdr + i), true);                  //preheating to the rest temperature, store temperature log        
       termostat(EEPROM.read(rTemp_startAdr + i), EEPROM.read(rTime_startAdr + i), true);  //termostating on the rest temperature, store temperature log 
     }  
   }
 
-  myGLCD.print("Draining mash , pre-", 0, 110);
-  myGLCD.print("-heating for boiling", 0, 130);  
-  boilingTemp = EEPROM.read(twiceBoilTemp_adr) * 0.5;  // float variable boilingTemp read from EEPROM
-  preheating(boilingTemp-1, true);                     // PRE-HEATING before boiling,  store temperature log
+  //myGLCD.print("Draining mash , pre-", 0, 110);
+  //myGLCD.print("-heating for boiling", 0, 130);  
+  //boilingTemp = EEPROM.read(twiceBoilTemp_adr) * 0.5;  // float variable boilingTemp read from EEPROM
+  //preheating(boilingTemp-1, true);                     // PRE-HEATING before boiling,  store temperature log
 
   rwi2c.put(trace_adr, 0);                             // indicate sucsessfull done of mashing process for power shootdown manager
   
   myGLCD.print("    Mashing done.    ", 0, 110);       // finished all mash steps
-  myGLCD.print("Prepared for boiling.", 0, 130); 
+  myGLCD.print("U can rinse the malt", 0, 130); 
 
   b_Menu    = myButtons.addButton(30, 195, 120, 40, "Menu");     // buttons initialisation
   b_Boiling = myButtons.addButton(160, 195, 150, 40, "Boiling"); 
@@ -577,11 +550,11 @@ restore_mashing:                                   //MASHING RESTORE START
     }
   }
 }
-//-------------------------------------------------------------
 void boiling_setup() {
-  int b_TimeMinus[6], b_TimePlus[6], b_Menu, b_Boil, b_hopMinus, b_hopPlus, b_Next; //buttons IDs
-  int i;                                                     // counter
-  topic = "BOIL stp";                                    // Topic
+  int b_TimeMinus[6], b_TimePlus[6], b_Menu, b_Boil, b_hopMinus, b_hopPlus, b_boiltMinus, b_boiltPlus, b_prehDeMinus, b_prehDePlus, b_Next; //buttons IDs
+  
+  int i;                                                   // counter
+  topic = "BOIL stp";                                      // Topic
   myGLCD.clrScr();                                         // clear screen
   myButtons.deleteAllButtons();                            // delete old buttons
   myButtons.setTextFont(BigFont);                          // buttons font
@@ -589,11 +562,22 @@ void boiling_setup() {
   myGLCD.setBackColor(0, 0, 0);                            // back color black
   myGLCD.setColor(255, 255, 255);                          // text color white
   myGLCD.print("N of Hops", 0, 50);                        // drawing menu for choosing N of hops
-  myGLCD.printNumI(EEPROM.read(hNum_adr), 253, 50, 2);
-  b_hopMinus = myButtons.addButton(230, 50 + i * 22, 20, 20, "-");
-  b_hopPlus  = myButtons.addButton(290, 50 + i * 22, 20, 20, "+");
-  b_Menu      = myButtons.addButton(30, 195, 120, 40, "Menu");
-  b_Next      = myButtons.addButton(170, 195, 120, 40, "Next");
+  myGLCD.print("Preheat delt", 0, 100);
+  myGLCD.print("Boiling temp", 0, 130);
+  
+  myGLCD.printNumI(EEPROM.read(hNum_adr), 250, 50, 2);
+  myGLCD.printNumI(EEPROM.read(preheatDelta_adr), 250, 100);
+  boilingTemp = EEPROM.read(twiceBoilTemp_adr) * 0.5;      //read boil temp form EEPROM
+  myGLCD.printNumF(boilingTemp, 1, 222, 130, '.', 4);
+  
+  b_hopMinus     = myButtons.addButton(197, 50 , 20, 20, "-");
+  b_hopPlus      = myButtons.addButton(300, 50 , 20, 20, "+");
+  b_prehDeMinus  = myButtons.addButton(197, 100, 20, 20, "-");
+  b_prehDePlus   = myButtons.addButton(300, 100, 20, 20, "+");
+  b_boiltMinus   = myButtons.addButton(197, 130, 20, 20, "-");
+  b_boiltPlus    = myButtons.addButton(300, 130, 20, 20, "+");
+  b_Menu         = myButtons.addButton(30, 195, 120, 40, "Menu");
+  b_Next         = myButtons.addButton(170, 195, 120, 40, "Next");
   myButtons.setButtonColors(VGA_WHITE, VGA_GRAY, VGA_BLUE, VGA_RED, VGA_BLUE);
   myButtons.drawButtons();
 
@@ -603,13 +587,31 @@ void boiling_setup() {
       pressed_button = myButtons.checkButtons();
       if (pressed_button == b_hopMinus and EEPROM.read(hNum_adr) > 1 ) { // - HOP pressed
         EEPROM.write(hNum_adr, EEPROM.read(hNum_adr) - 1);
-        myGLCD.printNumI(EEPROM.read(hNum_adr), 253, 50, 2);
+        myGLCD.printNumI(EEPROM.read(hNum_adr), 250, 50, 2);
       }
       if (pressed_button == b_hopPlus and EEPROM.read(hNum_adr) < 5 ) {  // + HOP pressed
         EEPROM.write(hNum_adr, EEPROM.read(hNum_adr) + 1);
-        myGLCD.printNumI(EEPROM.read(hNum_adr), 253, 50, 2);
+        myGLCD.printNumI(EEPROM.read(hNum_adr), 250, 50, 2);
       }
-      if (pressed_button == b_Menu) {
+      if (pressed_button == b_prehDeMinus and EEPROM.read(preheatDelta_adr) > 0 ) { // - preheat delta temp pressed
+        EEPROM.write(preheatDelta_adr, EEPROM.read(preheatDelta_adr) - 1);
+        myGLCD.printNumI(EEPROM.read(preheatDelta_adr), 250, 100);
+      }
+      if (pressed_button == b_prehDePlus and EEPROM.read(preheatDelta_adr) < 5 ) { // + preheat delta temp pressed
+        EEPROM.write(preheatDelta_adr, EEPROM.read(preheatDelta_adr) + 1);
+        myGLCD.printNumI(EEPROM.read(preheatDelta_adr), 250, 100);
+      }
+      if (pressed_button == b_boiltMinus and boilingTemp > 95 ) { // - boil temp pressed
+        boilingTemp = boilingTemp - 0.5;
+        myGLCD.printNumF(boilingTemp, 1, 222, 130, '.', 4);
+        EEPROM.update(twiceBoilTemp_adr, round(boilingTemp * 2));
+      }
+      if (pressed_button == b_boiltPlus and boilingTemp < 105 ) { // + boil temp pressed
+        boilingTemp = boilingTemp + 0.5;
+        myGLCD.printNumF(boilingTemp, 1, 222, 130, '.', 4);
+        EEPROM.update(twiceBoilTemp_adr, round(boilingTemp * 2));
+      }	  
+	  if (pressed_button == b_Menu) {
         mainmenu();           // MENU pressed
       }
       if (pressed_button == b_Next) {
@@ -654,7 +656,6 @@ BoilingSetNext:
     }
   }
 }
-//-----------------------------------------------------------
 void boil() {
   int b_Menu, b_Cool,b_boiltMinus, b_boiltPlus, i, c;  // buttons IDs and counter
   unsigned long starttime;                  // start time of boilind
@@ -721,8 +722,6 @@ restore_boiling:
                        EEPROM.update(twiceBoilTemp_adr, round(boilingTemp * 2));
                        }
          }    
-        if (digitalRead(LEVEL_BOTTOM_PIN)==HIGH) {   //check if water(mash) covers heaters
-      //  if (true) {                                      // !!!!!!!! temporary code !!!!!!!!!!!
             if (temp < boilingTemp) {
                   digitalWrite(HEAT_BOILER_PIN, HIGH);    //temperature less than target --> switch-ON the heater
 				  heaterStatus=1;
@@ -734,23 +733,9 @@ restore_boiling:
             myGLCD.print("Passed    of    mins", CENTER, 130); //
             myGLCD.printNumI(pass_minutes, 96, 130, 3);      // print passed time
             myGLCD.printNumI(EEPROM.read(hTime_startAdr + EEPROM.read(hNum_adr)), 192, 130, 3);  // print total time of boiling
-       } else {                                              // LOW WATER(MASH) LEVEL !
-            digitalWrite(HEAT_BOILER_PIN, LOW);              // low water --> switch-off the heater
-			heaterStatus=0;
-            myGLCD.setColor(255, 0, 0);
-            myGLCD.print("LOW MASH LEVEL!", CENTER, 130);    // warning message LOW MASH LEVEL
-            tone(BUZZER_PIN, 1047,400);
-            delay(500);
-            tone(BUZZER_PIN, 784,400);
-            delay(500);
-            tone(BUZZER_PIN, 1047,400);
-            delay(500);
-            tone(BUZZER_PIN, 784,400);
-            delay(500);
-            myGLCD.print("                ", 0, 130);
-       }
-      pass_minutes = (rtc.getUnixTime(rtc.getTime()) - starttime - time_penalty) / 60;    // recalculate passed time     
-      rwi2c.put(pass_minutes_adr, pass_minutes);              // save pass_minutes to RTC register
+     
+	 pass_minutes = (rtc.getUnixTime(rtc.getTime()) - starttime - time_penalty) / 60;    // recalculate passed time     
+     rwi2c.put(pass_minutes_adr, pass_minutes);              // save pass_minutes to RTC register
     }
     myGLCD.print("                     ", 0, 110);
     digitalWrite(HEAT_BOILER_PIN, LOW);                     // time for next hop, switch-off heater
@@ -809,7 +794,6 @@ restore_boiling:
     }
   }
 }
-//-----------------------Cool-------------------------------
 void cool_setup() {
   int b_TempMinus, b_TempPlus, b_Next, b_desTimeMinus, b_desTimePlus, b_Menu;   // buttons IDs
   topic = "COOL stp";                                   // topic
@@ -936,8 +920,6 @@ restore_cooling:
   }
   mainmenu();
 }
-
-//---------------------------------------------------
 void service() {
   int b_HeaterOn, b_HeaterOff, b_PumpOn, b_PumpOff, b_Menu;  // buttons IDs
   topic = "Service";                             // topic
@@ -948,16 +930,18 @@ void service() {
   myGLCD.setBackColor(0, 0, 0);                  // back color black
   //myGLCD.print("Unit    Satus Action", 0, 40);   // print
   myGLCD.setColor(255, 255, 255);                // text color White
-  myGLCD.print("Top lvl  ", 0, 40);    // print
-  myGLCD.print("Bott lvl ", 0, 80);   // print
-  myGLCD.print("Heater     ", 0, 120);   // print
-  myGLCD.print("Pump       ", 0, 160);   // print
-
+  myGLCD.print("LEVEL", 0, 40);
+  // myGLCD.print("Bott lvl ", 0, 80);
+  // myGLCD.print("Heater     ", 0, 120); 
+  // myGLCD.print("Pump       ", 0, 160);
+  myGLCD.print("HEATER     ", 0, 90); 
+  myGLCD.print("PUMP       ", 0, 140); 
+  
   myButtons.setTextFont(BigFont);                          // buttons font
-  b_HeaterOn  = myButtons.addButton(205, 115, 50, 30, "On"); // buttons initialisation
-  b_HeaterOff = myButtons.addButton(265, 115, 54, 30, "Off");
-  b_PumpOn    = myButtons.addButton(205, 155, 50, 30, "On");
-  b_PumpOff   = myButtons.addButton(265, 155, 54, 30, "Off");
+  b_HeaterOn  = myButtons.addButton(201, 75, 54, 45, "On"); // buttons initialisation
+  b_HeaterOff = myButtons.addButton(265, 75, 54, 45, "Off");
+  b_PumpOn    = myButtons.addButton(201, 130, 54, 45, "On");
+  b_PumpOff   = myButtons.addButton(265, 130, 54, 45, "Off");
   b_Menu     = myButtons.addButton(60, 195, 120, 40, "Menu");
   myButtons.setButtonColors(VGA_WHITE, VGA_GRAY, VGA_BLUE, VGA_RED, VGA_BLUE);
   myButtons.drawButtons();                              // draw buttons
@@ -973,30 +957,18 @@ void service() {
         digitalWrite(PUMP_PIN, LOW);				// disable pump because overflow
 		pumpStatus=0;		
     }
-    if (digitalRead(LEVEL_BOTTOM_PIN) == LOW) {
-		myGLCD.setColor(255, 0, 0);                  // text color Red
-		myGLCD.print("LOW ", 144, 80);
-		digitalWrite(PUMP_PIN, LOW);				// disable pump and heater because low mash level
-		digitalWrite(HEAT_BOILER_PIN,LOW);
-		pumpStatus=0;	
-		heaterStatus=0;
-    } else {
-		myGLCD.setColor(50, 50, 255);                // text color Blue
-		myGLCD.print("HIGH", 144, 80);
-    }
 	myGLCD.setColor(50, 50, 255);                // text color Blue
     if (myTouch.dataAvailable()) {                  //reading buttons
       pressed_button = myButtons.checkButtons();
-      if (pressed_button == b_HeaterOn and digitalRead(LEVEL_BOTTOM_PIN) == HIGH) {
+      if (pressed_button == b_HeaterOn ) {
         digitalWrite(HEAT_BOILER_PIN, HIGH);
 		heaterStatus=1;
-        myGLCD.print("ON ", 144, 120);
       }
       if (pressed_button == b_HeaterOff) {
         digitalWrite(HEAT_BOILER_PIN, LOW);
 		heaterStatus=0;
       }
-      if (pressed_button == b_PumpOn and digitalRead(LEVEL_TOP_PIN) == LOW and digitalRead(LEVEL_BOTTOM_PIN) == HIGH) {
+      if (pressed_button == b_PumpOn and digitalRead(LEVEL_TOP_PIN) == LOW ) {
         digitalWrite(PUMP_PIN, HIGH);
 		pumpStatus=1;
       }
@@ -1012,11 +984,20 @@ void service() {
         mainmenu();
       }
     }
-	if(heaterStatus==0){myGLCD.print("OFF", 144, 120);}else{myGLCD.print("ON ", 144, 120);}
-	if(pumpStatus==0){myGLCD.print("OFF", 144, 160);}else{myGLCD.print("ON ", 144, 160);}
+	if(heaterStatus==0){
+	    myGLCD.setColor(50, 50, 255);              //Blue
+	    myGLCD.print("OFF", 144, 90);
+	  }else{
+	    myGLCD.setColor(255, 0, 0);                //Red
+	    myGLCD.print("ON ", 144, 90);}
+	if(pumpStatus==0){
+      myGLCD.setColor(50, 50, 255);              //Blue
+	    myGLCD.print("OFF", 144, 140);
+	  }else{
+      myGLCD.setColor(255, 0, 0);                //Red
+	    myGLCD.print("ON ", 144, 140);}
   }
 }
-//-------------------------------------------------------------
 void systemS() {
   Serial.println("System Setup");
 
@@ -1117,58 +1098,68 @@ void systemS() {
     }
   }
 }
-//-----------------------------------------------------------------
 void icon(){
 	Serial.println("draw Icon");
 	int xPreset = 280; // Max 320  (+40)
 	int yPreset = 200; // Max 240  (+40)
 	myGLCD.setColor(0, 0, 0);                                // draw color Black	
 	myGLCD.fillRect(xPreset,yPreset,xPreset+40,yPreset+40);  // clear drowing area
-
-	myGLCD.setColor(255, 255, 255);                              // draw color White
-	myGLCD.drawRect(xPreset+15,yPreset+0,xPreset+35,yPreset+16);  //upper pot
-	myGLCD.drawRect(xPreset+11,yPreset+16,xPreset+39,yPreset+35); //lower pot
-	myGLCD.drawRect(xPreset+0,yPreset+4,xPreset+15,yPreset+5);    //upper shtuzer
-	myGLCD.drawRect(xPreset+0,yPreset+32,xPreset+11,yPreset+33);  //lower shtuzer
+// draw external pot
+	myGLCD.setColor(255, 255, 255);                              //  White
+	myGLCD.drawRect(xPreset+10,yPreset+9,xPreset+37,yPreset+34); 
+	myGLCD.setColor(0, 0, 0);                                   //  Black
+	myGLCD.drawLine(xPreset+11, yPreset+9, xPreset+36, yPreset+9);
+// draw internal pot
+	myGLCD.setColor(255, 255, 255);                              //  White
+	myGLCD.drawRect(xPreset+13,yPreset+7,xPreset+34,yPreset+31); 
+	myGLCD.setColor(0, 0, 0);                                   //  Black
+	myGLCD.drawLine(xPreset+14, yPreset+7, xPreset+33, yPreset+7);
+// draw hose
+	myGLCD.setColor(150, 150, 150);                              //  Gray
+	myGLCD.drawRect(xPreset+3,yPreset+31,xPreset+10,yPreset+32); 
+	myGLCD.drawRect(xPreset+3,yPreset+0,xPreset+25,yPreset+1); 
+	myGLCD.drawRect(xPreset+3,yPreset+2,xPreset+4,yPreset+30); 
+	
+	
 // Pump
 	if(pumpStatus==0){
-		myGLCD.setColor(50, 50,50);                              // draw color Gray
-		myGLCD.fillRect(xPreset+0,yPreset+6,xPreset+5,yPreset+31);
+		myGLCD.setColor(0, 0,0);                              // Black
+		myGLCD.fillRect(xPreset+20,yPreset+2,xPreset+28,yPreset+6);
+   
+    myGLCD.setColor(150, 150, 150);                              //  Gray
+    myGLCD.drawRect(xPreset+3,yPreset+31,xPreset+10,yPreset+32); 
+    myGLCD.drawRect(xPreset+3,yPreset+0,xPreset+25,yPreset+1); 
+    myGLCD.drawRect(xPreset+3,yPreset+2,xPreset+4,yPreset+30); 
+   
 	}else{
 		myGLCD.setColor(0, 0,255);                              // draw color Blue
-		myGLCD.fillRect(xPreset+0,yPreset+5,xPreset+5,yPreset+32);		
+		myGLCD.drawLine(xPreset+24, yPreset+2, xPreset+24, yPreset+6);
+		myGLCD.drawLine(xPreset+24, yPreset+2, xPreset+20, yPreset+6);
+		myGLCD.drawLine(xPreset+24, yPreset+2, xPreset+28, yPreset+6);
+    
+    myGLCD.drawRect(xPreset+3,yPreset+31,xPreset+10,yPreset+32); 
+    myGLCD.drawRect(xPreset+3,yPreset+0,xPreset+25,yPreset+1); 
+    myGLCD.drawRect(xPreset+3,yPreset+2,xPreset+4,yPreset+30); 
 	}
 // HEATER
 	if(heaterStatus==0){
-		myGLCD.setColor(50, 50,50);                              // draw color Gray
-		myGLCD.fillRect(xPreset+15,yPreset+36,xPreset+35,yPreset+40);
+		myGLCD.setColor(150, 150,150);                              // draw color Gray
+		myGLCD.fillRect(xPreset+13,yPreset+35,xPreset+34,yPreset+37);
 	}else{
-		myGLCD.setColor(255, 200,0);                              // draw color Yelow
-		myGLCD.fillRect(xPreset+15,yPreset+36,xPreset+35,yPreset+40);		
+		myGLCD.setColor(255, 0,0);                              // draw color Red
+		myGLCD.fillRect(xPreset+13,yPreset+35,xPreset+34,yPreset+37);		
 	}
 //Uper level
 	if(digitalRead(LEVEL_TOP_PIN) == LOW ){
 		myGLCD.setColor(0, 0,0);                              // draw color Black
-		myGLCD.fillRect(xPreset+16,yPreset+2,xPreset+34,yPreset+15);
+		myGLCD.fillRect(xPreset+14,yPreset+7,xPreset+33,yPreset+16);
 		myGLCD.setColor(0, 0,255);                              // draw color Blue
-		myGLCD.fillRect(xPreset+16,yPreset+12,xPreset+34,yPreset+15);
+		myGLCD.fillRect(xPreset+14,yPreset+17,xPreset+33,yPreset+30);
 	}else{
-		myGLCD.setColor(255, 0,0);                              // draw color Red
-		myGLCD.fillRect(xPreset+16,yPreset+2,xPreset+34,yPreset+15);
-	}
-//lower level
-		if(digitalRead(LEVEL_BOTTOM_PIN) == LOW ){
-		myGLCD.setColor(0,0,0);                              // draw color Black
-		myGLCD.fillRect(xPreset+12,yPreset+18,xPreset+38,yPreset+34);
-		myGLCD.setColor(255,0,0);                              // draw color Red
-		myGLCD.fillRect(xPreset+12,yPreset+32,xPreset+38,yPreset+34);
-	}else{
-		myGLCD.setColor(0,0,255);                              // draw color Blue
-		myGLCD.fillRect(xPreset+12,yPreset+18,xPreset+38,yPreset+34);
+		myGLCD.setColor(0, 0,255);                              // draw color Blue
+		myGLCD.fillRect(xPreset+14,yPreset+7,xPreset+33,yPreset+30);
 	}
 }
-
-//-----------------------------------------------------------------
 void seeLog() {
   Serial.println("Log");
   int i;                                                      //counter
@@ -1201,10 +1192,9 @@ void seeLog() {
   }
   mainmenu();
 }
-//=====================  void setup ==========================
 void setup() {
   int i; 
-  pinMode(LEVEL_BOTTOM_PIN, INPUT);       // Initialisation of inputs/outputs. exept temperature pins
+  // Initialisation of inputs/outputs. exept temperature pins
   pinMode(LEVEL_TOP_PIN, INPUT);
   pinMode(HEAT_BOILER_PIN, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT);
@@ -1324,18 +1314,17 @@ void setup() {
     EEPROM.update(desinfTime_adr, 5); //target time for desinfection of chiller
   }
 
-  boilingTemp = 30;          //--------==========  temporary code  ==========-------------
-  EEPROM.update(twiceBoilTemp_adr, round(boilingTemp * 2));
+  //boilingTemp = 30;          //--------==========  temporary code  ==========-------------
+  //EEPROM.update(twiceBoilTemp_adr, round(boilingTemp * 2));
 
-  // boilingTemp= EEPROM.read(twiceBoilTemp_adr)*0.5; //-------===========  main code  ============------------
-  // if (boilingTemp<95 or boilingTemp>105){
-  //     boilingTemp=100;
-  //     EEPROM.update(twiceBoilTemp_adr, round(boilingTemp*2));
-  // }
+  boilingTemp= EEPROM.read(twiceBoilTemp_adr)*0.5; //-------===========  main code  ============------------
+  if (boilingTemp<95 or boilingTemp>105){
+       boilingTemp=100;
+       EEPROM.update(twiceBoilTemp_adr, round(boilingTemp*2));
+   }
 
   Serial.println("setup routine done");
 }
-//=============  void loop=============
 void loop() {
   mainmenu();
 }
