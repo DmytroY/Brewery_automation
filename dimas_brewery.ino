@@ -231,7 +231,6 @@ void mainmenu() {
   topic = "";                                                           // Topic
   myButtons.setTextFont(BigFont);                                       // Font for buttons
 
-    
   b_Mashing   = myButtons.addButton(5, 30, 140, 90, "MASH");        // Initialisation of Buttons
   b_Boiling   = myButtons.addButton(5, 140, 140, 90, "BOIL");
 
